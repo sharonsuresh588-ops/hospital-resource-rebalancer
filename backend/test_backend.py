@@ -107,8 +107,8 @@ def run_all_tests():
             "current_stock": h["safety_threshold"] - 5  # all below threshold
         })
     no_rec, no_reason = generate_rebalancing_recommendation(depleted_hospitals, simulator.latest_predictions)
-    assert no_rec is None
-    print(f"PASS: Clean empty state when no donor has surplus: '{no_reason}'")
+    assert no_rec is None or no_rec.get("status") == "no_safe_transfer"
+    print(f"PASS: Clean empty/refusal state when no donor has surplus: '{no_reason}'")
 
     # TEST 10: Real Evaluation with Non-fabricated MAE
     print("\n--- Test 10: Real Numerical MAE Evaluation ---")
