@@ -1,0 +1,25 @@
+# Environments and virtualenvs
+.venv/
+env/
+venv/
+ENV/
+
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+.env.local
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Logs and system
+*.log
+.DS_Store
+Thumbs.db

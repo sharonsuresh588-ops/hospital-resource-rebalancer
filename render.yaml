@@ -1,0 +1,43 @@
+services:
+  # 1. FastAPI Backend Web Service on Render
+  - type: web
+    name: hospital-resource-rebalancer-api
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        value: hospital_rebalancer
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PORT
+        value: 10000
+
+  # 2. React / Vite Static Site Frontend on Render
+  - type: web
+    name: hospital-resource-rebalancer-ui
+    env: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    autoDeploy: true
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://hospital-resource-rebalancer-api.onrender.com/api/*
+      - type: rewrite
+        source: /health
+        destination: https://hospital-resource-rebalancer-api.onrender.com/health
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE
+        value: https://hospital-resource-rebalancer-api.onrender.com
