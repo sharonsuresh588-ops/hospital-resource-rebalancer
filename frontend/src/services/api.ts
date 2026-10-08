@@ -1,6 +1,13 @@
-import type { DashboardState, ReplayData, EvaluationData } from '../types';
+import type {
+  DashboardState,
+  ReplayData,
+  EvaluationData,
+  NetworkRiskItem,
+  AuditEvent,
+  WhatIfScenarioResult,
+} from '../types';
 
-const API_BASE = (import.meta.env.VITE_API_BASE as string) || ''; // Configurable for Render deployment, defaults to relative proxy in development
+const API_BASE = (import.meta.env.VITE_API_BASE as string) || '';
 
 export async function fetchState(): Promise<DashboardState> {
   const resp = await fetch(`${API_BASE}/api/state`);
@@ -35,6 +42,19 @@ export async function injectSurge(): Promise<DashboardState> {
   return data.state;
 }
 
+export async function setSimulationScenario(scenarioName: string): Promise<DashboardState> {
+  const resp = await fetch(`${API_BASE}/api/simulation/scenario`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario_name: scenarioName }),
+  });
+  if (!resp.ok) {
+    throw new Error(`Failed to set scenario: ${resp.statusText}`);
+  }
+  const data = await resp.json();
+  return data.state;
+}
+
 export async function approveRecommendation(recId: string): Promise<DashboardState> {
   const resp = await fetch(`${API_BASE}/api/recommendations/${recId}/approve`, {
     method: 'POST',
@@ -61,4 +81,67 @@ export async function fetchEvaluation(): Promise<EvaluationData> {
     throw new Error(`Failed to fetch evaluation: ${resp.statusText}`);
   }
   return resp.json();
+}
+
+export async function fetchNetworkRisk(): Promise<NetworkRiskItem[]> {
+  const resp = await fetch(`${API_BASE}/api/network-risk`);
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch network risk: ${resp.statusText}`);
+  }
+  const data = await resp.json();
+  return data.network_risk_ranking;
+}
+
+export async function fetchAuditTrail(): Promise<AuditEvent[]> {
+  const resp = await fetch(`${API_BASE}/api/audit`);
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch audit trail: ${resp.statusText}`);
+  }
+  const data = await resp.json();
+  return data.audit_trail;
+}
+
+export async function simulateWhatIfScenario(
+  scenarioType: string,
+  options?: {
+    demand_multiplier?: number;
+    excluded_donors?: string[];
+    delay_minutes?: number;
+    custom_quantity?: number;
+  }
+): Promise<WhatIfScenarioResult> {
+  const resp = await fetch(`${API_BASE}/api/scenario/simulate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scenario_type: scenarioType,
+      demand_multiplier: options?.demand_multiplier ?? 1.0,
+      excluded_donors: options?.excluded_donors ?? [],
+      delay_minutes: options?.delay_minutes ?? 0,
+      custom_quantity: options?.custom_quantity,
+    }),
+  });
+  if (!resp.ok) {
+    throw new Error(`Failed to simulate scenario: ${resp.statusText}`);
+  }
+  return resp.json();
+}
+
+export async function executeCopilotAction(
+  actionType: string,
+  facts: Record<string, any>
+): Promise<string> {
+  const resp = await fetch(`${API_BASE}/api/copilot/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action_type: actionType,
+      facts,
+    }),
+  });
+  if (!resp.ok) {
+    throw new Error(`Failed to execute copilot action: ${resp.statusText}`);
+  }
+  const data = await resp.json();
+  return data.content;
 }

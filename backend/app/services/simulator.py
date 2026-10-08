@@ -5,9 +5,10 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from app.database import db_manager
-from app.services.predictor import predict_hospital_depletion
+from app.services.predictor import predict_hospital_depletion, compute_network_risk_ranking
 from app.services.optimizer import generate_rebalancing_recommendation
 from app.services.evaluation import DEFAULT_EVALUATION
+from app.services.audit import record_audit_event, get_audit_trail
 
 logger = logging.getLogger("simulator")
 
@@ -80,6 +81,8 @@ class HospitalSimulator:
         self.tick: int = 0
         self.running: bool = False
         self.surge_active: bool = False
+        self.multi_surge: bool = False
+        self.scenario_name: str = "standard_surge"
         self.hospitals: Dict[str, Dict[str, Any]] = {}
         self.history: Dict[str, List[Dict[str, Any]]] = {h["id"]: [] for h in DEFAULT_HOSPITALS}
         self.latest_predictions: List[Dict[str, Any]] = []
@@ -92,9 +95,11 @@ class HospitalSimulator:
         self.reset()
 
     def reset(self):
-        """Restores system to exact initial demo state (Section 10)."""
+        """Restores system to exact initial demo state."""
         self.tick = 0
         self.surge_active = False
+        self.multi_surge = False
+        self.scenario_name = "standard_surge"
         self.units_transferred = 0
         self.shortage_hours_prevented = 0.0
         self.transfers_completed = 0
@@ -126,14 +131,12 @@ class HospitalSimulator:
                 "current_stock": init_stock,
                 "base_rate": h["base_rate"],
             }
-            # Upsert hospital doc
             hospitals_col.update_one(
                 {"id": h["id"]},
                 {"$set": self.hospitals[h["id"]]},
                 upsert=True
             )
 
-            # Pre-seed 3 historical points (t=-2, t=-1, t=0) with small normal consumption
             for offset in [-2, -1, 0]:
                 historical_stock = init_stock - int(offset * h["base_rate"])
                 reading = {
@@ -146,12 +149,18 @@ class HospitalSimulator:
                 self.history[h["id"]].append(reading)
                 readings_col.insert_one(reading)
 
-        # Record initial evaluation benchmark in evaluation_runs collection
+        # Record evaluation benchmark
         eval_col = db_manager.get_collection("evaluation_runs")
         eval_col.insert_one(DEFAULT_EVALUATION)
 
         # Calculate initial predictions
         self._recalculate_predictions()
+        
+        record_audit_event("SIMULATION_RESET", {
+            "tick": 0,
+            "scenario": "standard_surge",
+            "message": "Simulator reset to deterministic baseline state.",
+        })
         logger.info("Simulator reset to deterministic initial baseline state.")
 
     def _recalculate_predictions(self):
@@ -173,7 +182,7 @@ class HospitalSimulator:
         return preds
 
     def step(self):
-        """Executes one deterministic simulation tick (Section 7, 8, 9)."""
+        """Executes one deterministic simulation tick."""
         self.tick += 1
         now_str = datetime.utcnow().isoformat()
         readings_col = db_manager.get_collection("readings")
@@ -181,7 +190,6 @@ class HospitalSimulator:
 
         for hid, h in self.hospitals.items():
             base = h["base_rate"]
-            # Small deterministic sinusoidal variation
             variation = 0.3 * math.sin(self.tick * 0.8 + hash(hid) % 5)
             rate = base + variation
 
@@ -189,10 +197,13 @@ class HospitalSimulator:
             if self.surge_active and hid == "H-A":
                 rate = 17.5 + 0.5 * math.sin(self.tick)
 
+            # MULTI-HOSPITAL STRESS SCENARIO
+            if self.multi_surge and hid == "H-D":
+                rate = 14.0 + 0.5 * math.cos(self.tick)
+
             new_stock = max(5, int(round(h["current_stock"] - rate)))
             h["current_stock"] = new_stock
 
-            # Update live stock in hospitals collection
             hospitals_col.update_one(
                 {"id": hid},
                 {"$set": {"current_stock": new_stock}},
@@ -207,7 +218,6 @@ class HospitalSimulator:
                 "resource": "oxygen_cylinders",
             }
             self.history[hid].append(reading)
-            # Keep history within reasonable window for memory/UI
             if len(self.history[hid]) > 50:
                 self.history[hid] = self.history[hid][-50:]
 
@@ -216,9 +226,8 @@ class HospitalSimulator:
         # Recalculate predictions
         self._recalculate_predictions()
 
-        # Check optimizer if surge is active or pending shortage exists
-        # Only suggest recommendation if no pending recommendation is already awaiting human approval
-        has_pending = any(r.get("status") == "pending" for r in self.active_recommendations)
+        # Check optimizer if shortage or surge is active
+        has_pending = any(r.get("status") in ["pending", "no_safe_transfer"] for r in self.active_recommendations)
         if not has_pending:
             rec, reason = generate_rebalancing_recommendation(
                 hospitals=list(self.hospitals.values()),
@@ -228,7 +237,7 @@ class HospitalSimulator:
                 self.active_recommendations.append(rec)
                 recs_col = db_manager.get_collection("recommendations")
                 recs_col.insert_one(rec)
-                logger.info(f"Generated rebalancing recommendation: {rec['from_hospital']} -> {rec['to_hospital']} ({rec['quantity']} units)")
+                logger.info(f"Generated rebalancing recommendation: {rec.get('from_hospital')} -> {rec.get('to_hospital')} ({rec.get('quantity')} units)")
 
     async def _run_loop(self):
         """Continuous simulation loop ticking every 3.0 seconds."""
@@ -245,7 +254,7 @@ class HospitalSimulator:
             self.running = False
 
     def start(self):
-        """Starts the simulator if not already running (concurrency safe)."""
+        """Starts the simulator if not already running."""
         if self.running and self._loop_task and not self._loop_task.done():
             logger.info("Simulator already running.")
             return
@@ -254,7 +263,6 @@ class HospitalSimulator:
             loop = asyncio.get_running_loop()
             self._loop_task = loop.create_task(self._run_loop())
         except RuntimeError:
-            # Fallback if called outside active loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             self._loop_task = loop.create_task(self._run_loop())
@@ -269,15 +277,55 @@ class HospitalSimulator:
     def inject_surge(self):
         """Activates surge scenario for Hospital A."""
         self.surge_active = True
+        self.scenario_name = "standard_surge"
         logger.info("Demand surge injected into Hospital A!")
-        # If not currently running, trigger a single step immediately so UI reflects surge
+        record_audit_event("SURGE_INJECTED", {
+            "target_hospital": "H-A",
+            "tick": self.tick,
+            "message": "Demand surge injected into District Hospital A.",
+        })
         if not self.running:
             self.step()
 
+    def set_scenario(self, scenario_name: str):
+        """
+        Feature 11 — Demo Scenario Control.
+        Presets:
+          - 'standard_surge': Hospital A surge, Hospital B donor (primary hackathon demo).
+          - 'normal_operations': Normal calm telemetry across all facilities.
+          - 'multi_hospital_stress': Simultaneous surges on H-A and H-D.
+          - 'no_safe_donor': Severe regional depletion where no safe transfer is possible.
+        """
+        self.scenario_name = scenario_name
+        if scenario_name == "normal_operations":
+            self.surge_active = False
+            self.multi_surge = False
+            self.reset()
+        elif scenario_name == "standard_surge":
+            self.multi_surge = False
+            self.inject_surge()
+        elif scenario_name == "multi_hospital_stress":
+            self.surge_active = True
+            self.multi_surge = True
+            self.step()
+        elif scenario_name == "no_safe_donor":
+            self.surge_active = True
+            self.multi_surge = False
+            # Reduce all potential donor surplus stocks close to safety threshold
+            for hid, h in self.hospitals.items():
+                if hid != "H-A":
+                    h["current_stock"] = h["safety_threshold"] + 4
+            self.step()
+
+        record_audit_event("SCENARIO_SWITCHED", {
+            "scenario": scenario_name,
+            "tick": self.tick,
+        })
+
     def approve_recommendation(self, rec_id: str) -> Dict[str, Any]:
         """
-        Executes human approval of transfer (Section 27).
-        Re-validates donor safety, updates stocks, recalculates predictions, records metric.
+        Executes human approval of transfer.
+        Re-validates donor safety, updates stocks, recalculates predictions, records metrics.
         """
         rec = None
         for r in self.active_recommendations:
@@ -287,6 +335,9 @@ class HospitalSimulator:
 
         if not rec:
             raise ValueError(f"Recommendation with ID '{rec_id}' not found.")
+
+        if rec["status"] == "no_safe_transfer":
+            raise ValueError("Cannot approve transfer: No safe donor exists. Immediate external escalation required.")
 
         if rec["status"] != "pending":
             raise ValueError(f"Recommendation is already {rec['status']}.")
@@ -301,7 +352,7 @@ class HospitalSimulator:
         if not donor or not destination:
             raise ValueError("Hospital entities not found in simulator.")
 
-        # Revalidate donor safety rule (Section 21, 27)
+        # Revalidate donor safety rule
         if (donor["current_stock"] - quantity) < donor["safety_threshold"]:
             rec["status"] = "rejected"
             raise ValueError(
@@ -318,16 +369,13 @@ class HospitalSimulator:
 
         self.units_transferred += quantity
         self.transfers_completed += 1
-        # Calculate shortage hours prevented (approx 40 units / 17.5 rate * 0.5hr = ~1.14hr per transfer or ~5.8 hr overall)
         self.shortage_hours_prevented += round(quantity / 8.0, 1)
 
-        # Add transfer readings to history so regression catches immediate replenishment
         now_str = datetime.utcnow().isoformat()
         readings_col = db_manager.get_collection("readings")
         hospitals_col = db_manager.get_collection("hospitals")
 
         for hid in [from_id, to_id]:
-            # Update hospital stock document in database
             hospitals_col.update_one(
                 {"id": hid},
                 {"$set": {"current_stock": self.hospitals[hid]["current_stock"]}},
@@ -344,7 +392,6 @@ class HospitalSimulator:
             self.history[hid].append(reading)
             readings_col.insert_one(reading)
 
-        # Update recommendation in DB
         recs_col = db_manager.get_collection("recommendations")
         recs_col.update_one(
             {"id": rec_id},
@@ -352,14 +399,26 @@ class HospitalSimulator:
             upsert=True
         )
 
-        # Recalculate predictions immediately
         self._recalculate_predictions()
+
+        record_audit_event("TRANSFER_APPROVED", {
+            "recommendation_id": rec_id,
+            "from_hospital": from_id,
+            "to_hospital": to_id,
+            "quantity": quantity,
+            "approved_by": "Human Operations Coordinator",
+            "stock_after": {
+                from_id: donor["current_stock"],
+                to_id: destination["current_stock"],
+            },
+            "shortage_hours_prevented": self.shortage_hours_prevented,
+        })
 
         logger.info(f"Transfer approved: {quantity} units transferred from {from_id} to {to_id}.")
         return rec
 
     def get_consolidated_state(self) -> Dict[str, Any]:
-        """Provides consolidated dashboard payload for /api/state (Section 26)."""
+        """Provides consolidated dashboard payload for /api/state."""
         critical_count = sum(
             1 for p in self.latest_predictions if p.get("status") == "CRITICAL"
         )
@@ -367,9 +426,18 @@ class HospitalSimulator:
             1 for r in self.active_recommendations if r.get("status") == "pending"
         )
 
+        # Feature 4: Network Risk Priority
+        risk_ranking = compute_network_risk_ranking(
+            hospitals=list(self.hospitals.values()),
+            predictions=self.latest_predictions,
+        )
+
+        # Feature 8: Decision Audit Trail
+        audit_trail = get_audit_trail(limit=15)
+
         db_info = db_manager.get_status_info()
 
-        # Build clean history for charts: list of time points with stocks
+        # Build clean history for charts
         timeline = []
         max_len = max((len(h) for h in self.history.values()), default=0)
         for i in range(max_len):
@@ -387,10 +455,13 @@ class HospitalSimulator:
                 "surge_active": self.surge_active,
                 "tick": self.tick,
                 "tick_interval_seconds": 3.0,
+                "scenario_name": self.scenario_name,
             },
             "hospitals": list(self.hospitals.values()),
             "predictions": self.latest_predictions,
             "recommendations": self.active_recommendations,
+            "network_risk_ranking": risk_ranking,
+            "audit_trail": audit_trail,
             "evaluation": DEFAULT_EVALUATION,
             "metrics": {
                 "shortage_hours_prevented": round(self.shortage_hours_prevented, 1),
@@ -399,15 +470,16 @@ class HospitalSimulator:
                 "hospitals_monitored": len(self.hospitals),
                 "critical_shortages": critical_count,
                 "active_recommendations": active_recs_count,
+                "safe_transfer_opportunities": 1 if any(r.get("status") == "pending" and r.get("is_safe_transfer", True) for r in self.active_recommendations) else 0,
+                "hospitals_at_risk": sum(1 for r in risk_ranking if r.get("risk_level") in ["CRITICAL", "WARNING", "NETWORK EMERGENCY"]),
             },
             "system_health": {
                 "api": "HEALTHY",
                 "database": db_info,
                 "simulator": "RUNNING" if self.running else "IDLE",
             },
-            "timeline": timeline[-25:],  # latest 25 readings for chart
+            "timeline": timeline[-25:],
         }
 
 
-# Singleton simulator instance
 simulator = HospitalSimulator()

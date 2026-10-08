@@ -123,3 +123,79 @@ def predict_hospital_depletion(
         "confidence": confidence,
         "status": status,
     }
+
+
+def compute_network_risk_ranking(
+    hospitals: List[Dict[str, Any]],
+    predictions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Feature 4 — Network-Wide Risk Priority.
+    Calculates a transparent deterministic risk score for every hospital.
+    Classifies risk level:
+      - NETWORK EMERGENCY: Extreme deficit or multiple simultaneous failures
+      - CRITICAL: Time to shortage <= 2.5h or stock <= safety threshold
+      - WARNING: Time to shortage <= 5.0h or stock <= safety threshold + 20
+      - WATCH: Time to shortage <= 10.0h or high depletion rate (> 4 u/hr)
+      - NORMAL: Reserves comfortable and depletion low
+    Returns hospitals sorted by highest risk priority first.
+    """
+    pred_by_id = {p["hospital_id"]: p for p in predictions}
+    ranking = []
+
+    for h in hospitals:
+        hid = h["id"]
+        pred = pred_by_id.get(hid, {})
+        stock = float(h.get("current_stock", 0))
+        threshold = float(h.get("safety_threshold", 50))
+        shortage_hrs = pred.get("time_to_shortage_hours")
+        depletion = float(pred.get("depletion_rate", 2.0))
+        confidence = float(pred.get("confidence", 0.5))
+
+        # Projected 4-hour minimum stock
+        projected_min_stock = round(max(0.0, stock - (depletion * 4.0)), 1)
+
+        # Risk Classification & Score Computation
+        if stock <= (threshold * 0.7) or (shortage_hrs is not None and shortage_hrs <= 1.0):
+            risk_level = "NETWORK EMERGENCY"
+            base_score = 1200.0 + max(0.0, threshold - stock) * 15.0
+        elif stock <= threshold or (shortage_hrs is not None and shortage_hrs <= 2.5):
+            risk_level = "CRITICAL"
+            horizon_urgency = (3.0 - (shortage_hrs if shortage_hrs is not None else 0.0)) * 120.0
+            base_score = 800.0 + horizon_urgency
+        elif (shortage_hrs is not None and shortage_hrs <= 5.0) or stock <= (threshold + 20):
+            risk_level = "WARNING"
+            horizon_urgency = (6.0 - (shortage_hrs if shortage_hrs is not None else 5.0)) * 50.0
+            base_score = 500.0 + horizon_urgency
+        elif (shortage_hrs is not None and shortage_hrs <= 10.0) or depletion >= 4.0:
+            risk_level = "WATCH"
+            base_score = 250.0 + (depletion * 10.0)
+        else:
+            risk_level = "NORMAL"
+            base_score = max(10.0, 100.0 - (depletion * 15.0))
+
+        # Risk score calculation
+        risk_score = round(base_score + (depletion * 5.0) + (confidence * 10.0), 1)
+
+        ranking.append({
+            "hospital_id": hid,
+            "hospital_name": h.get("name", hid),
+            "current_stock": int(stock),
+            "safety_threshold": int(threshold),
+            "depletion_rate": round(depletion, 2),
+            "time_to_shortage_hours": shortage_hrs,
+            "projected_min_stock": projected_min_stock,
+            "confidence": confidence,
+            "risk_score": risk_score,
+            "risk_level": risk_level,
+        })
+
+    # Sort descending by risk score (highest risk first)
+    ranking.sort(key=lambda x: x["risk_score"], reverse=True)
+
+    # Assign 1-indexed ranks
+    for idx, item in enumerate(ranking):
+        item["rank"] = idx + 1
+
+    return ranking
+

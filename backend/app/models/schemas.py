@@ -92,3 +92,17 @@ class ExplainRequest(BaseModel):
     destination_shortage_hours: Optional[float] = None
     source_safe_surplus: int
     dispatch_deadline_minutes: int
+
+class ScenarioSimulateRequest(BaseModel):
+    scenario_type: str = "demand_plus_20"
+    demand_multiplier: float = 1.0
+    excluded_donors: Optional[List[str]] = None
+    delay_minutes: int = 0
+    custom_quantity: Optional[int] = None
+
+class CopilotActionRequest(BaseModel):
+    action_type: str
+    facts: Dict[str, Any]
+
+class SetScenarioRequest(BaseModel):
+    scenario_name: str

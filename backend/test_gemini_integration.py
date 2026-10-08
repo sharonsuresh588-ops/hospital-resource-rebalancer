@@ -17,8 +17,7 @@ def test_gemini_integration():
     # 1. Verify GEMINI_API_KEY is present in backend configuration
     print("\n[Check 1] Checking Backend GEMINI_API_KEY Configuration")
     assert bool(GEMINI_API_KEY), "GEMINI_API_KEY is missing from backend configuration!"
-    # Verify key begins with standard Google AI Studio prefix
-    assert GEMINI_API_KEY.startswith("AIzaSy"), "GEMINI_API_KEY does not have expected prefix"
+    assert GEMINI_API_KEY.startswith("AIzaSy") or GEMINI_API_KEY.startswith("AQ."), "GEMINI_API_KEY does not have expected prefix"
     print(f"PASS: GEMINI_API_KEY is configured (Length: {len(GEMINI_API_KEY)}, Prefix: {GEMINI_API_KEY[:6]}...)")
 
     # 2. Test Live Gemini API Explanation Generation

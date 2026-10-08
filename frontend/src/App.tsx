@@ -7,16 +7,21 @@ import {
   injectSurge,
   approveRecommendation,
   fetchReplay,
+  setSimulationScenario,
 } from './services/api';
 
 import { Header } from './components/Header';
 import { SummaryCards } from './components/SummaryCards';
 import { ControlBar } from './components/ControlBar';
+import { NetworkRiskPanel } from './components/NetworkRiskPanel';
 import { HospitalGrid } from './components/HospitalGrid';
 import { RecommendationPanel } from './components/RecommendationPanel';
 import { LiveChart } from './components/LiveChart';
 import { EvaluationPanel } from './components/EvaluationPanel';
+import { DecisionAuditPanel } from './components/DecisionAuditPanel';
 import { ReplayModal } from './components/ReplayModal';
+import { WhatIfModal } from './components/WhatIfModal';
+import { CopilotModal } from './components/CopilotModal';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import './App.css';
 
@@ -26,14 +31,17 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // Replay modal state
+  // Modals state
   const [replayOpen, setReplayOpen] = useState<boolean>(false);
   const [replayData, setReplayData] = useState<ReplayData | null>(null);
   const [replayLoading, setReplayLoading] = useState<boolean>(false);
 
+  const [whatIfOpen, setWhatIfOpen] = useState<boolean>(false);
+  const [copilotOpen, setCopilotOpen] = useState<boolean>(false);
+
   const pollIntervalRef = useRef<number | null>(null);
 
-  // Initial load and continuous 2-second polling loop (Section 40)
+  // Polling loop (2-second interval)
   const loadState = async (showLoadingSpinner: boolean = false) => {
     if (showLoadingSpinner) setLoading(true);
     try {
@@ -42,7 +50,6 @@ export function App() {
       setError(null);
     } catch (err: any) {
       console.error('Error fetching dashboard state:', err);
-      // Only set error banner if we don't already have state, avoiding white screen
       if (!state) {
         setError('Unable to connect to backend service. Retrying in background...');
       }
@@ -54,7 +61,6 @@ export function App() {
   useEffect(() => {
     loadState(true);
 
-    // Setup 2-second polling loop
     pollIntervalRef.current = window.setInterval(() => {
       loadState(false);
     }, 2000);
@@ -70,10 +76,7 @@ export function App() {
     if (!state) return;
     setActionLoading('play');
     try {
-      if (state.simulation.running) {
-        // Stop is achieved via reset or pause endpoint
-        // For simplicity, if running, fetch state or pause
-      } else {
+      if (!state.simulation.running) {
         await startSimulation();
       }
       await loadState();
@@ -104,6 +107,18 @@ export function App() {
       setError(null);
     } catch (err: any) {
       console.error('Reset failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleSelectScenario = async (scenarioName: string) => {
+    setActionLoading('scenario');
+    try {
+      const updated = await setSimulationScenario(scenarioName);
+      setState(updated);
+    } catch (err: any) {
+      console.error('Scenario selection failed:', err);
     } finally {
       setActionLoading(null);
     }
@@ -146,6 +161,8 @@ export function App() {
     );
   }
 
+  const activeRec = state?.recommendations?.find((r) => r.status === 'pending') || null;
+
   return (
     <div className="app-container">
       {state && (
@@ -165,32 +182,44 @@ export function App() {
           )}
 
           <main className="dashboard-content">
+            {/* Feature 10: Executive Command Center Overview */}
             <SummaryCards metrics={state.metrics} />
 
+            {/* Feature 11: Control Bar with Presets */}
             <ControlBar
               simulation={state.simulation}
               onTogglePlay={handleTogglePlay}
               onInjectSurge={handleInjectSurge}
               onReset={handleReset}
               onOpenReplay={handleOpenReplay}
+              onOpenWhatIf={() => setWhatIfOpen(true)}
+              onOpenCopilot={() => setCopilotOpen(true)}
+              onSelectScenario={handleSelectScenario}
               loadingAction={actionLoading}
             />
 
-            {/* Prominent Operational Optimizer & Rebalancing Panel */}
+            {/* Feature 4: Network-Wide Risk Priority */}
+            {state.network_risk_ranking && (
+              <NetworkRiskPanel ranking={state.network_risk_ranking} />
+            )}
+
+            {/* Features 1, 2, 3, 5: Feasibility Dispatch Optimizer */}
             <RecommendationPanel
               recommendations={state.recommendations || []}
               hospitals={state.hospitals || []}
               onApprove={handleApproveRecommendation}
+              onOpenWhatIf={() => setWhatIfOpen(true)}
+              onOpenCopilot={() => setCopilotOpen(true)}
             />
 
-            {/* Hospital Grid */}
+            {/* Monitored Facilities Grid */}
             <HospitalGrid
               hospitals={state.hospitals || []}
               predictions={state.predictions || []}
               surgeActive={state.simulation.surge_active}
             />
 
-            {/* Trajectory Chart & Held-out Evaluation Grid */}
+            {/* Real-time Trajectory Chart & Robust Evaluation */}
             <div className="dashboard-lower-grid">
               <LiveChart
                 timeline={state.timeline || []}
@@ -200,22 +229,42 @@ export function App() {
 
               <EvaluationPanel evaluation={state.evaluation} />
             </div>
+
+            {/* Feature 8: Decision Audit Trail */}
+            {state.audit_trail && (
+              <DecisionAuditPanel auditTrail={state.audit_trail} />
+            )}
           </main>
 
           <footer className="app-footer">
             <div className="footer-content">
               <span>HN-AI-05 Emergency Operations Center</span>
               <span>
-                Simulated Oxygen Cylinders • Linear Trend Shortage Prediction • Deterministic Python Optimization
+                Deterministic Python Optimizer • Feasibility-Aware Donor Scoring • MongoDB Atlas Persisted • Gemini Copilot
               </span>
             </div>
           </footer>
 
+          {/* Feature 7: Advanced Counterfactual Replay Modal */}
           <ReplayModal
             isOpen={replayOpen}
             onClose={() => setReplayOpen(false)}
             replayData={replayData}
             loading={replayLoading}
+          />
+
+          {/* Feature 6: What-If Scenario Modal */}
+          <WhatIfModal
+            isOpen={whatIfOpen}
+            onClose={() => setWhatIfOpen(false)}
+          />
+
+          {/* Feature 9: Gemini Operations Copilot Modal */}
+          <CopilotModal
+            isOpen={copilotOpen}
+            onClose={() => setCopilotOpen(false)}
+            recommendation={activeRec}
+            hospitals={state.hospitals || []}
           />
         </>
       )}

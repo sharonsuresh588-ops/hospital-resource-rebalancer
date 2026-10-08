@@ -12,6 +12,7 @@ REQUIRED_COLLECTIONS = [
     "predictions",
     "recommendations",
     "evaluation_runs",
+    "audit_trail",
 ]
 
 class InMemoryCollection:
@@ -194,9 +195,11 @@ class DatabaseManager:
             col: InMemoryCollection(col) for col in REQUIRED_COLLECTIONS
         }
 
-    def connect(self):
+    def connect(self, uri: Optional[str] = None):
         """Attempts connection to MongoDB Atlas with graceful fallback."""
-        if not MONGODB_URI:
+        target_uri = uri if uri is not None else MONGODB_URI
+        target_db_name = MONGODB_DATABASE
+        if not target_uri:
             logger.info("No MONGODB_URI configured. Operating in DEMO FALLBACK mode (In-Memory).")
             self.is_connected = False
             self.mode = "DEMO FALLBACK"
@@ -204,11 +207,11 @@ class DatabaseManager:
             return
 
         try:
-            logger.info(f"Connecting to MongoDB Atlas (database: {MONGODB_DATABASE})...")
-            self.client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=3000)
+            logger.info(f"Connecting to MongoDB Atlas (database: {target_db_name})...")
+            self.client = MongoClient(target_uri, serverSelectionTimeoutMS=3000)
             # Verify connectivity via ping command
             self.client.admin.command('ping')
-            self.db = self.client[MONGODB_DATABASE]
+            self.db = self.client[target_db_name]
             self.is_connected = True
             self.mode = "CONNECTED"
             self.last_error = None
@@ -235,7 +238,8 @@ class DatabaseManager:
             self.db["recommendations"].create_index([("id", 1)])
             self.db["hospitals"].create_index([("id", 1)], unique=True)
             self.db["evaluation_runs"].create_index([("timestamp", -1)])
-            logger.info("MongoDB Atlas indexes verified on all 5 required collections.")
+            self.db["audit_trail"].create_index([("timestamp", -1)])
+            logger.info("MongoDB Atlas indexes verified on required collections.")
         except Exception as e:
             logger.warning(f"Could not initialize MongoDB indexes: {e}")
 

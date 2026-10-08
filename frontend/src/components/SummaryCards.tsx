@@ -1,6 +1,6 @@
 import React from 'react';
 import type { Metrics } from '../types';
-import { Building2, AlertTriangle, GitPullRequest, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, GitPullRequest, ShieldCheck, Flame, Compass } from 'lucide-react';
 
 interface SummaryCardsProps {
   metrics: Metrics;
@@ -9,23 +9,14 @@ interface SummaryCardsProps {
 export const SummaryCards: React.FC<SummaryCardsProps> = ({ metrics }) => {
   const isCritical = metrics.critical_shortages > 0;
   const hasRecs = metrics.active_recommendations > 0;
+  const hospitalsAtRisk = metrics.hospitals_at_risk ?? (isCritical ? 1 : 0);
+  const safeOpportunities = metrics.safe_transfer_opportunities ?? (hasRecs ? 1 : 0);
 
   return (
     <div className="summary-cards-grid">
-      <div className="summary-card">
-        <div className="card-top">
-          <span className="card-title">HOSPITALS MONITORED</span>
-          <div className="card-icon-wrap icon-neutral">
-            <Building2 size={18} />
-          </div>
-        </div>
-        <div className="card-value">{metrics.hospitals_monitored || 6}</div>
-        <div className="card-footnote">Continuously tracking oxygen stock</div>
-      </div>
-
       <div className={`summary-card ${isCritical ? 'card-critical-alert' : ''}`}>
         <div className="card-top">
-          <span className="card-title">CRITICAL SHORTAGES</span>
+          <span className="card-title">CRITICAL HOSPITALS</span>
           <div className={`card-icon-wrap ${isCritical ? 'icon-critical' : 'icon-safe'}`}>
             <AlertTriangle size={18} />
           </div>
@@ -34,7 +25,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ metrics }) => {
           {metrics.critical_shortages}
         </div>
         <div className="card-footnote">
-          {isCritical ? 'Immediate intervention needed' : 'All facilities above threshold'}
+          {isCritical ? 'Immediate redistribution required' : 'All facilities within threshold'}
         </div>
       </div>
 
@@ -49,8 +40,32 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ metrics }) => {
           {metrics.active_recommendations}
         </div>
         <div className="card-footnote">
-          {hasRecs ? 'Awaiting human coordinator signoff' : 'No transfers pending'}
+          {hasRecs ? 'Awaiting human coordinator signoff' : 'Zero pending dispatches'}
         </div>
+      </div>
+
+      <div className="summary-card">
+        <div className="card-top">
+          <span className="card-title">SAFE TRANSFER OPPORTUNITIES</span>
+          <div className="card-icon-wrap icon-neutral">
+            <Compass size={18} />
+          </div>
+        </div>
+        <div className="card-value">{safeOpportunities}</div>
+        <div className="card-footnote">Feasible donors satisfying 4h reserve</div>
+      </div>
+
+      <div className={`summary-card ${hospitalsAtRisk > 0 ? 'card-warning-alert' : ''}`}>
+        <div className="card-top">
+          <span className="card-title">HOSPITALS AT RISK</span>
+          <div className={`card-icon-wrap ${hospitalsAtRisk > 0 ? 'icon-warning' : 'icon-safe'}`}>
+            <Flame size={18} />
+          </div>
+        </div>
+        <div className={`card-value ${hospitalsAtRisk > 0 ? 'text-amber' : 'text-safe'}`}>
+          {hospitalsAtRisk}
+        </div>
+        <div className="card-footnote">Facilities under Watch, Warning, or Critical</div>
       </div>
 
       <div className="summary-card card-accent">

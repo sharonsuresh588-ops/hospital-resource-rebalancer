@@ -16,6 +16,7 @@ def test_mongodb_integration():
 
     # 1. Verify required collections
     print("\n[Check 1] Verifying 5 Required Collections Definition")
+    db_manager.connect()
     for col_name in ["hospitals", "readings", "predictions", "recommendations", "evaluation_runs"]:
         assert col_name in REQUIRED_COLLECTIONS, f"Missing required collection: {col_name}"
         col = db_manager.get_collection(col_name)
@@ -137,8 +138,7 @@ def test_mongodb_integration():
     # 8. Test In-Memory Fallback Resilience Under Connection Failure
     print("\n[Check 8] Verifying In-Memory Fallback Under Simulated Connection Failure")
     test_db = DatabaseManager()
-    # Attempt connecting to invalid URI
-    test_db.connect()  # with empty URI
+    test_db.connect(uri="")  # Force unconfigured / connection failure mode
     assert test_db.is_connected is False
     assert test_db.mode == "DEMO FALLBACK"
     test_hosp_col = test_db.get_collection("hospitals")
