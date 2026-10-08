@@ -21,12 +21,11 @@ services:
         value: 10000
 
   # 2. React / Vite Static Site Frontend on Render
-  - type: web
+  - type: static
     name: hospital-resource-rebalancer-ui
-    env: static
     rootDir: frontend
     buildCommand: npm install && npm run build
-    staticPublishPath: dist
+    staticPublishPath: ./dist
     autoDeploy: true
     routes:
       - type: rewrite
